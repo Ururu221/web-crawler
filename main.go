@@ -10,7 +10,14 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 )
+
+var mu sync.Mutex
+
+var wg sync.WaitGroup
 
 var db *gorm.DB
 
@@ -18,10 +25,15 @@ type InfoURLs struct {
 	Info string
 }
 
-var totalAmountOfLinks int
+var totalAmountOfSpecialLinks int64
 
-func crawl(url string, depth int, resultString *string, passedLinks *[]string, printedLinks *[]string) error {
-	//*resultString += fmt.Sprintf("\ngo to %s\n", url)
+func crawl(url string, depth int, resultString *string, passedLinks *sync.Map, printedLinks *sync.Map, semaphore *chan struct{}) error {
+	*semaphore <- struct{}{}
+
+	defer func() {
+		<-*semaphore
+		wg.Done()
+	}()
 
 	res, err := http.Get(url)
 	if err != nil {
@@ -39,13 +51,13 @@ func crawl(url string, depth int, resultString *string, passedLinks *[]string, p
 	}
 
 	depth -= 1
-
-	*resultString += fmt.Sprintf("\n- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - \n")
-	*resultString += fmt.Sprintf("go to %s\n", url)
-
 	allLinksOnPage := 0
-
 	j := 0
+
+	crawlTo1UrlString := ""
+
+	crawlTo1UrlString += fmt.Sprintf("\n- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - \n")
+	crawlTo1UrlString += fmt.Sprintf("GO TO:  %s\n", url)
 
 	doc.Find("a").Each(func(i int, s *goquery.Selection) {
 		href, exists := s.Attr("href")
@@ -53,26 +65,17 @@ func crawl(url string, depth int, resultString *string, passedLinks *[]string, p
 			if strings.HasPrefix(href, "http") || strings.HasPrefix(href, "https") ||
 				strings.HasPrefix(href, "/") {
 
-				isDuplicate := false
-
-				for _, link := range *printedLinks {
-					if link == href {
-						isDuplicate = true
-						break
-					}
-				}
-
-				if !isDuplicate {
+				if _, loaded := printedLinks.LoadOrStore(href, true); !loaded {
 					absoluteURL, err := toAbsoluteURL(url, href)
 					if err != nil {
-						panic(err)
+						fmt.Println("\nPANIC ", err)
+						return
 					}
 
-					*printedLinks = append(*printedLinks, absoluteURL)
-					*resultString += fmt.Sprintf("\n%d: %s, depth: %d\n", j+1, absoluteURL, depth)
+					crawlTo1UrlString += fmt.Sprintf("\n%d: %s, depth: %d\n", j+1, absoluteURL, depth)
 
 					j++
-					totalAmountOfLinks++
+					atomic.AddInt64(&totalAmountOfSpecialLinks, 1)
 				}
 			}
 		}
@@ -81,8 +84,12 @@ func crawl(url string, depth int, resultString *string, passedLinks *[]string, p
 
 	})
 
-	*resultString += fmt.Sprintf("\n===================== amount of all links on this page (with duplicate) is %d\n",
+	crawlTo1UrlString += fmt.Sprintf("\n===================== amount of all links on this page (with duplicate) is %d\n",
 		allLinksOnPage)
+
+	mu.Lock()
+	*resultString += crawlTo1UrlString
+	mu.Unlock()
 
 	//RECURSIVE
 	doc.Find("a").Each(func(i int, s *goquery.Selection) {
@@ -90,37 +97,22 @@ func crawl(url string, depth int, resultString *string, passedLinks *[]string, p
 		if exists {
 			if depth > 0 && (strings.HasPrefix(href, "http") || strings.HasPrefix(href, "https") ||
 				strings.HasPrefix(href, "/")) {
-				isDuplicate := false
-				for _, link := range *passedLinks {
+
+				if _, loaded := passedLinks.LoadOrStore(href, true); !loaded && depth > 0 {
 					absoluteURL, err := toAbsoluteURL(url, href)
 					if err != nil {
-						panic(err)
+						fmt.Println("\nPANIC ", err)
+						return
 					}
 
-					if absoluteURL == link {
-						//fmt.Printf("\n%d: %s is duplicate depth: %d\n", i+1, href, *depth)
-						isDuplicate = true
-						break
-					}
-				}
-
-				if !isDuplicate && depth > 0 {
-					absoluteURL, err := toAbsoluteURL(url, href)
-					if err != nil {
-						panic(err)
-					}
-
-					*resultString += fmt.Sprintf("\n%d CRAWL TO: %s, depth: %d\n", i+1, absoluteURL, depth)
-					*passedLinks = append(*passedLinks, absoluteURL)
-
-					crawl(href, depth, resultString, passedLinks, printedLinks)
-
+					wg.Add(1)
+					go crawl(absoluteURL, depth, resultString, passedLinks, printedLinks, semaphore)
 				}
 			}
 		}
 	})
 
-	defer fmt.Printf("\n\npassed links: \n%v", *passedLinks)
+	defer fmt.Printf("%d: processing..\n", j)
 
 	return nil
 }
@@ -137,15 +129,35 @@ func crawlRequest(c echo.Context) error {
 		return err
 	}
 
-	result := ""
-	totalAmountOfLinks = 0
-
-	err = crawl(url, depth, &result, &[]string{}, &[]string{})
+	maxConcurrentRequests, err := strconv.Atoi(c.FormValue("maxConcurrentRequests"))
 	if err != nil {
 		return err
 	}
 
-	links := fmt.Sprintf("total amount of links: %d", totalAmountOfLinks)
+	result := ""
+	totalAmountOfSpecialLinks = 0
+	var passedLinks sync.Map
+	var printedLinks sync.Map
+
+	wg.Add(1)
+
+	//maxConcurrentRequests := 20
+	semaphore := make(chan struct{}, maxConcurrentRequests)
+
+	timeStart := time.Now()
+
+	err = crawl(url, depth, &result, &passedLinks, &printedLinks, &semaphore)
+	wg.Wait()
+	if err != nil {
+		fmt.Println(err)
+		return err
+	}
+
+	totalTime := time.Since(timeStart)
+	fmt.Printf("\n\n%v - total time to crawl: %s\nwith depth: %d\ntotal amount of special links: %d\nnumber of concurrent requests: %d\n",
+		totalTime, url, depth, totalAmountOfSpecialLinks, maxConcurrentRequests)
+
+	links := fmt.Sprintf("total amount of links (without duplicates): %d", totalAmountOfSpecialLinks)
 
 	result = fmt.Sprintf("%s\n\n%s", links, result)
 
