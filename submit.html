@@ -3,11 +3,74 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>1234</title>
+    <title>Results</title>
+    <style>
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+        }
+        th {
+            background-color: #f2f2f2;
+            text-align: left;
+        }
+        tr:hover {
+            background-color: #e6e6e6;
+        }
+        .iteration-separator {
+            font-weight: bold;
+            color: #333;
+        }
+        .iteration-separator td {
+            background-color: #f0f0f0;
+            padding: 10px;
+        }
+        .fixed-width {
+            width: 550px;
+            word-wrap: anywhere;
+            white-space: normal;
+        }
+    </style>
 </head>
 <body>
+<h1>Results</h1>
+
 <pre>
-{{.Info}}
+{{ .TotalLinks }}
 </pre>
+
+<table>
+    <thead>
+    <tr>
+        <th>Index</th>
+        <th>Go to</th>
+        <th>From</th>
+        <th class="url-column">URL</th> <!-- Добавляем класс для колонки -->
+        <th>Depth</th>
+    </tr>
+    </thead>
+    <tbody>
+    {{range .Info}}
+        {{if .IsNewIteration}}
+            <tr class="iteration-separator">
+                <td colspan="6" style="background-color: #f0f0f0; padding: 10px; text-align: center;">
+                    Iteration: {{.GoTo}} - Total Links with Duplicates: {{.InfoAboutUrl}}
+                </td>
+            </tr>
+        {{else}}
+            <tr>
+                <td>{{.Index}}</td>
+                <td class="fixed-width">{{.GoTo}}</td>
+                <td>{{.From}}</td>
+                <td class="fixed-width"><a href="{{.URL}}" target="_blank">{{.IndexForURl}}:  {{.URL}}</a></td>
+                <td>{{.Depth}}</td>
+            </tr>
+        {{end}}
+    {{end}}
+    </tbody>
+</table>
 </body>
 </html>

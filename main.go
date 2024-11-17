@@ -21,13 +21,27 @@ var wg sync.WaitGroup
 
 var db *gorm.DB
 
+type Result struct {
+	Index          int64
+	GoTo           string
+	From           string
+	URL            string
+	InfoAboutUrl   int
+	Depth          int
+	IndexForURl    int
+	IsNewIteration bool
+}
+
 type InfoURLs struct {
-	Info string
+	Info       []Result
+	TotalLinks string
 }
 
 var totalAmountOfSpecialLinks int64
+var totalAmountOfAllLinks int64
+var linkIndexCounter int64
 
-func crawl(url string, depth int, resultString *string, passedLinks *sync.Map, printedLinks *sync.Map, semaphore *chan struct{}) error {
+func crawl(url string, depth int, result *[]Result, passedLinks *sync.Map, printedLinks *sync.Map, semaphore *chan struct{}, indexToCrawl int64) error {
 	*semaphore <- struct{}{}
 
 	defer func() {
@@ -52,53 +66,80 @@ func crawl(url string, depth int, resultString *string, passedLinks *sync.Map, p
 
 	depth -= 1
 	allLinksOnPage := 0
-	j := 0
+	j := 1
+	isNewIteration := false
 
-	crawlTo1UrlString := ""
+	//crawlTo1UrlString := ""
 
-	crawlTo1UrlString += fmt.Sprintf("\n- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - \n")
-	crawlTo1UrlString += fmt.Sprintf("GO TO:  %s\n", url)
+	//crawlTo1UrlString += fmt.Sprintf("\n- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - \n")
+	//crawlTo1UrlString += fmt.Sprintf("GO TO %d link:  %s\n", indexToCrawl, url)
 
-	doc.Find("a").Each(func(i int, s *goquery.Selection) {
+	doc.Find("a").Each(func(i int, s *goquery.Selection) { // i -- это количество всех ссылок и с дубликатами
 		href, exists := s.Attr("href")
 		if exists {
 			if strings.HasPrefix(href, "http") || strings.HasPrefix(href, "https") ||
 				strings.HasPrefix(href, "/") {
 
-				if _, loaded := printedLinks.LoadOrStore(href, true); !loaded {
+				if _, loaded := printedLinks.LoadOrStore(href, true); !loaded { // проверка на дубликат
 					absoluteURL, err := toAbsoluteURL(url, href)
 					if err != nil {
 						fmt.Println("\nPANIC ", err)
 						return
 					}
 
-					crawlTo1UrlString += fmt.Sprintf("\n%d: %s, depth: %d\n", j+1, absoluteURL, depth)
+					//crawlTo1UrlString += fmt.Sprintf("\n%d: %s, depth: %d\n", j, absoluteURL, depth)
 
-					j++
+					// Логика для добавления ссылки
+					crawlTo1Link := Result{
+						Index:          indexToCrawl,
+						GoTo:           url,
+						Depth:          depth,
+						URL:            absoluteURL,
+						IndexForURl:    j,
+						IsNewIteration: isNewIteration, // Устанавливаем флаг новой итерации
+					}
+
+					*result = append(*result, crawlTo1Link)
+
+					//isNewIteration = false
+					j++ // счетчик ссылок без дубликатов на одной странице
+
 					atomic.AddInt64(&totalAmountOfSpecialLinks, 1)
 				}
 			}
 		}
 
 		allLinksOnPage = i
-
+		atomic.AddInt64(&totalAmountOfAllLinks, 1)
 	})
 
-	crawlTo1UrlString += fmt.Sprintf("\n===================== amount of all links on this page (with duplicate) is %d\n",
-		allLinksOnPage)
+	//crawlTo1UrlString += fmt.Sprintf("\n===================== amount of all links on this page (with duplicate) is %d\n", allLinksOnPage)
+	// Добавляем информацию о количестве ссылок на странице
+
+	//crawlTo1Link.InfoAboutUrl = fmt.Sprintf("%d", allLinksOnPage)
+
+	// Добавляем информацию о количестве ссылок на странице
+	crawlTo1Link := Result{
+		InfoAboutUrl:   allLinksOnPage,
+		Index:          -1,
+		IndexForURl:    -1,
+		Depth:          -1,
+		GoTo:           fmt.Sprintf("%s", url),
+		IsNewIteration: true,
+	}
 
 	mu.Lock()
-	*resultString += crawlTo1UrlString
+	*result = append(*result, crawlTo1Link)
 	mu.Unlock()
 
 	//RECURSIVE
-	doc.Find("a").Each(func(i int, s *goquery.Selection) {
+	doc.Find("a").Each(func(i int, s *goquery.Selection) { // i -- это количество всех ссылок и с дубликатами
 		href, exists := s.Attr("href")
 		if exists {
 			if depth > 0 && (strings.HasPrefix(href, "http") || strings.HasPrefix(href, "https") ||
 				strings.HasPrefix(href, "/")) {
 
-				if _, loaded := passedLinks.LoadOrStore(href, true); !loaded && depth > 0 {
+				if _, loaded := passedLinks.LoadOrStore(href, true); !loaded && depth > 0 { // проверка на дубликат
 					absoluteURL, err := toAbsoluteURL(url, href)
 					if err != nil {
 						fmt.Println("\nPANIC ", err)
@@ -106,11 +147,16 @@ func crawl(url string, depth int, resultString *string, passedLinks *sync.Map, p
 					}
 
 					wg.Add(1)
-					go crawl(absoluteURL, depth, resultString, passedLinks, printedLinks, semaphore)
+
+					atomic.AddInt64(&linkIndexCounter, 1)
+
+					go crawl(absoluteURL, depth, result, passedLinks, printedLinks, semaphore, linkIndexCounter)
 				}
 			}
 		}
 	})
+
+	atomic.StoreInt64(&linkIndexCounter, 0)
 
 	defer fmt.Printf("%d: processing..\n", j)
 
@@ -134,19 +180,21 @@ func crawlRequest(c echo.Context) error {
 		return err
 	}
 
-	result := ""
-	totalAmountOfSpecialLinks = 0
+	var result []Result // конечный массив в котором и будет информация для таблицы
+
+	totalAmountOfSpecialLinks = 0 // количество всех ссылок на странице без дубликатов
+	totalAmountOfAllLinks = 0     // количество всех ссылок на странице с дубликатами
+
 	var passedLinks sync.Map
 	var printedLinks sync.Map
 
 	wg.Add(1)
 
-	//maxConcurrentRequests := 20
 	semaphore := make(chan struct{}, maxConcurrentRequests)
 
 	timeStart := time.Now()
 
-	err = crawl(url, depth, &result, &passedLinks, &printedLinks, &semaphore)
+	err = crawl(url, depth, &result, &passedLinks, &printedLinks, &semaphore, 1)
 	wg.Wait()
 	if err != nil {
 		fmt.Println(err)
@@ -157,12 +205,12 @@ func crawlRequest(c echo.Context) error {
 	fmt.Printf("\n\n%v - total time to crawl: %s\nwith depth: %d\ntotal amount of special links: %d\nnumber of concurrent requests: %d\n",
 		totalTime, url, depth, totalAmountOfSpecialLinks, maxConcurrentRequests)
 
-	links := fmt.Sprintf("total amount of links (without duplicates): %d", totalAmountOfSpecialLinks)
-
-	result = fmt.Sprintf("%s\n\n%s", links, result)
+	links := fmt.Sprintf("Total amount of links (without duplicates): %d\n"+
+		"Total amount of links (with duplicates): %d", totalAmountOfSpecialLinks, totalAmountOfAllLinks)
 
 	info := InfoURLs{
-		Info: result,
+		Info:       result,
+		TotalLinks: links,
 	}
 
 	return showURLs(c, &info)
