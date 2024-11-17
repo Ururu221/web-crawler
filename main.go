@@ -69,11 +69,6 @@ func crawl(url string, depth int, result *[]Result, passedLinks *sync.Map, print
 	j := 1
 	isNewIteration := false
 
-	//crawlTo1UrlString := ""
-
-	//crawlTo1UrlString += fmt.Sprintf("\n- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - \n")
-	//crawlTo1UrlString += fmt.Sprintf("GO TO %d link:  %s\n", indexToCrawl, url)
-
 	doc.Find("a").Each(func(i int, s *goquery.Selection) { // i -- это количество всех ссылок и с дубликатами
 		href, exists := s.Attr("href")
 		if exists {
@@ -87,21 +82,17 @@ func crawl(url string, depth int, result *[]Result, passedLinks *sync.Map, print
 						return
 					}
 
-					//crawlTo1UrlString += fmt.Sprintf("\n%d: %s, depth: %d\n", j, absoluteURL, depth)
-
-					// Логика для добавления ссылки
 					crawlTo1Link := Result{
 						Index:          indexToCrawl,
 						GoTo:           url,
 						Depth:          depth,
 						URL:            absoluteURL,
 						IndexForURl:    j,
-						IsNewIteration: isNewIteration, // Устанавливаем флаг новой итерации
+						IsNewIteration: isNewIteration,
 					}
 
 					*result = append(*result, crawlTo1Link)
 
-					//isNewIteration = false
 					j++ // счетчик ссылок без дубликатов на одной странице
 
 					atomic.AddInt64(&totalAmountOfSpecialLinks, 1)
@@ -113,12 +104,6 @@ func crawl(url string, depth int, result *[]Result, passedLinks *sync.Map, print
 		atomic.AddInt64(&totalAmountOfAllLinks, 1)
 	})
 
-	//crawlTo1UrlString += fmt.Sprintf("\n===================== amount of all links on this page (with duplicate) is %d\n", allLinksOnPage)
-	// Добавляем информацию о количестве ссылок на странице
-
-	//crawlTo1Link.InfoAboutUrl = fmt.Sprintf("%d", allLinksOnPage)
-
-	// Добавляем информацию о количестве ссылок на странице
 	crawlTo1Link := Result{
 		InfoAboutUrl:   allLinksOnPage,
 		Index:          -1,

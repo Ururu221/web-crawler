@@ -3,22 +3,114 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>123</title>
+    <title>Web Crawler and Search</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background-color: #f4f4f9;
+            color: #333;
+        }
+        .container {
+            display: flex;
+            justify-content: flex-start;
+            gap: 4rem;
+            padding: 2rem;
+        }
+        .box {
+            background: #ffffff;
+            padding: 1.5rem;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+            width: 300px;
+            display: flex;
+            flex-direction: column;
+        }
+        h2 {
+            margin-top: 0;
+            color: #007bff;
+        }
+        form {
+            display: flex;
+            flex-direction: column;
+            flex-grow: 1;
+        }
+        label {
+            margin-top: 0.75rem;
+            font-weight: bold;
+        }
+        input[type="text"] {
+            padding: 0.5rem;
+            margin-top: 0.25rem;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 1rem;
+        }
+        input[type="text"]:focus {
+            border-color: #007bff;
+            outline: none;
+        }
+        input[type="submit"] {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 0.75rem;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-top: auto;
+            font-size: 1rem;
+        }
+        input[type="submit"]:hover {
+            background-color: #0056b3;
+        }
+        input[type="text"], input[type="submit"] {
+            margin-bottom: 1rem;
+        }
+    </style>
 </head>
 <body>
-    <form action="submit" method="post">
-        <label for="url">Write URL to crawl</label><br>
-        <input type="text" name="url" id="url" placeholder="URL"><br><br>
+<div class="container">
+    <div class="box">
+        <h2>Web Crawler</h2>
+        <form action="submit" method="post">
+            <label for="url">Write URL to crawl</label>
+            <input type="text" name="url" id="url" placeholder="URL">
 
-        <label for="depth">Write depth to crawl</label><br>
-        <input type="text" name="depth" id="depth" placeholder="Depth"><br><br>
+            <label for="depth">Write depth to crawl</label>
+            <input type="text" name="depth" id="depth" placeholder="Depth">
 
-        <label for="maxConcurrentRequests">Number of concurrent requests</label><br>
-        <label for="maxConcurrentRequests">recommended from 5 to 20</label><br>
-        <label for="maxConcurrentRequests">(if required serial output - write 1)</label><br>
-        <input type="text" name="maxConcurrentRequests" id="maxConcurrentRequests" placeholder="Number"><br><br>
+            <label for="maxConcurrentRequests">Number of concurrent requests</label>
+            <label for="maxConcurrentRequests">(recommended from 5 to 20)</label>
+            <label for="maxConcurrentRequests">(if required serial output - write 1)</label>
+            <input type="text" name="maxConcurrentRequests" id="maxConcurrentRequests" placeholder="Number">
 
-        <input type="submit" value="Submit">
-    </form><br><br>
+            <input type="submit" value="Submit">
+        </form>
+    </div>
+
+    <div class="box">
+        <h2>Search by Word</h2>
+        <form action="submit2" method="post">
+            <label for="url">Write URL to crawl</label>
+            <input type="text" name="url" id="url" placeholder="URL">
+
+            <label for="depth">Write depth to crawl</label>
+            <input type="text" name="depth" id="depth" placeholder="Depth">
+
+            <label for="maxConcurrentRequests">Number of concurrent requests</label>
+            <input type="text" name="maxConcurrentRequests" id="maxConcurrentRequests" placeholder="Number">
+
+            <label for="word">Write word you want to search</label>
+            <input type="text" name="word" id="word" placeholder="Word">
+
+            <input type="submit" value="Submit">
+        </form>
+    </div>
+</div>
 </body>
 </html>
