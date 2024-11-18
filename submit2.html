@@ -3,9 +3,87 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Search by word</title>
+    <title>Search Results</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background-color: #f4f4f9;
+            color: #333;
+            padding: 0;
+        }
+        .container {
+            width: 100%;
+            max-width: 1200px;
+            background: #ffffff;
+            padding: 2rem;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 1rem;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 10px;
+            text-align: left;
+            word-wrap: break-word;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+        tr:hover {
+            background-color: #f6f6f6;
+        }
+        .fixed-width {
+            width: 550px;
+            word-wrap: anywhere;
+            white-space: normal;
+        }
+        .highlight {
+            background-color: #e8f4fc;
+        }
+        h1 {
+            margin-bottom: 1rem;
+            color: #007bff;
+        }
+    </style>
 </head>
 <body>
-    
+<div class="container">
+    <h1>Search Results for Words</h1>
+    <p>Total Links: {{.TotalLinks}}</p>
+    <table>
+        <thead>
+        <tr>
+            <th>Index</th>
+            <th>Go To</th>
+            <th>Depth</th>
+            <th>Sentence with Word</th>
+            <th>Number of Occurrences</th>
+        </tr>
+        </thead>
+        <tbody>
+        {{range .Info}}
+            {{if .SentenceWithWord}}
+                <tr>
+                    <td>{{.Index}}</td>
+                    <td class="fixed-width"><a href="{{.GoTo}}" target="_blank">{{.GoTo}}</a></td>
+                    <td>{{.Depth}}</td>
+                    <td class="fixed-width">{{.SentenceWithWord}}</td>
+                    <td>{{.NumberOfWord}}</td>
+                </tr>
+            {{end}}
+        {{end}}
+        </tbody>
+
+    </table>
+</div>
 </body>
 </html>

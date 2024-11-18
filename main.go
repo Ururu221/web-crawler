@@ -4,10 +4,14 @@ import (
 	"fmt"
 	"github.com/PuerkitoBio/goquery"
 	"github.com/labstack/echo/v4"
+	"golang.org/x/text/encoding/charmap"
+	"golang.org/x/text/transform"
 	"gorm.io/gorm"
 	"html/template"
+	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,6 +26,7 @@ var wg sync.WaitGroup
 var db *gorm.DB
 
 type Result struct {
+	// for web crawler
 	Index          int64
 	GoTo           string
 	From           string
@@ -30,6 +35,9 @@ type Result struct {
 	Depth          int
 	IndexForURl    int
 	IsNewIteration bool
+	// for search by word
+	SentenceWithWord string
+	NumberOfWord     int
 }
 
 type InfoURLs struct {
@@ -41,7 +49,7 @@ var totalAmountOfSpecialLinks int64
 var totalAmountOfAllLinks int64
 var linkIndexCounter int64
 
-func crawl(url string, depth int, result *[]Result, passedLinks *sync.Map, printedLinks *sync.Map, semaphore *chan struct{}, indexToCrawl int64) error {
+func crawl(url string, depth int, result *[]Result, passedLinks *sync.Map, printedLinks *sync.Map, semaphore *chan struct{}, indexToCrawl int64, searchByWordFunc bool, searchWord string) error {
 	*semaphore <- struct{}{}
 
 	defer func() {
@@ -55,18 +63,27 @@ func crawl(url string, depth int, result *[]Result, passedLinks *sync.Map, print
 	}
 	defer res.Body.Close()
 
+	contentType := res.Header.Get("Content-Type")
+
+	var reader io.Reader
+	if strings.Contains(contentType, "charset=windows-1251") {
+		reader = transform.NewReader(res.Body, charmap.Windows1251.NewDecoder()) // Преобразование из Windows-1251 в UTF-8
+	} else {
+		reader = res.Body // Если кодировка UTF-8 или не указана, используем как есть
+	}
+
 	if res.StatusCode != 200 {
 		return fmt.Errorf("status code error: %d %s", res.StatusCode, res.Status)
 	}
 
-	doc, err := goquery.NewDocumentFromReader(res.Body)
+	doc, err := goquery.NewDocumentFromReader(reader)
 	if err != nil {
 		return err
 	}
 
 	depth -= 1
 	allLinksOnPage := 0
-	j := 1
+	j := 1 // счетчик ссылок без дубликатов на одной странице
 	isNewIteration := false
 
 	doc.Find("a").Each(func(i int, s *goquery.Selection) { // i -- это количество всех ссылок и с дубликатами
@@ -104,12 +121,37 @@ func crawl(url string, depth int, result *[]Result, passedLinks *sync.Map, print
 		atomic.AddInt64(&totalAmountOfAllLinks, 1)
 	})
 
+	//ЛОГИКА ПОИСКА СЛОВА НА СТРАНИЦЕ
+	if searchByWordFunc && searchWord != "" {
+		doc.Find("body").Each(func(i int, s *goquery.Selection) {
+			text := s.Text()
+			matches := findSentencesWithWord(text, searchWord)
+
+			if len(matches) > 0 {
+				for i, match := range matches {
+					crawlTo1Link := Result{
+						Index:            int64(i + 1),
+						GoTo:             url,
+						Depth:            depth,
+						SentenceWithWord: match,
+						NumberOfWord:     len(matches),
+					}
+
+					mu.Lock()
+					*result = append(*result, crawlTo1Link)
+					mu.Unlock()
+				}
+			}
+		})
+	}
+	//
+
 	crawlTo1Link := Result{
 		InfoAboutUrl:   allLinksOnPage,
 		Index:          -1,
 		IndexForURl:    -1,
 		Depth:          -1,
-		GoTo:           fmt.Sprintf("%s", url),
+		GoTo:           url,
 		IsNewIteration: true,
 	}
 
@@ -135,7 +177,7 @@ func crawl(url string, depth int, result *[]Result, passedLinks *sync.Map, print
 
 					atomic.AddInt64(&linkIndexCounter, 1)
 
-					go crawl(absoluteURL, depth, result, passedLinks, printedLinks, semaphore, linkIndexCounter)
+					go crawl(absoluteURL, depth, result, passedLinks, printedLinks, semaphore, linkIndexCounter, false, "")
 				}
 			}
 		}
@@ -155,6 +197,7 @@ func crawlRequest(c echo.Context) error {
 	}
 
 	url := c.FormValue("url")
+
 	depth, err := strconv.Atoi(c.FormValue("depth"))
 	if err != nil {
 		return err
@@ -179,7 +222,7 @@ func crawlRequest(c echo.Context) error {
 
 	timeStart := time.Now()
 
-	err = crawl(url, depth, &result, &passedLinks, &printedLinks, &semaphore, 1)
+	err = crawl(url, depth, &result, &passedLinks, &printedLinks, &semaphore, 1, false, "")
 	wg.Wait()
 	if err != nil {
 		fmt.Println(err)
@@ -198,11 +241,70 @@ func crawlRequest(c echo.Context) error {
 		TotalLinks: links,
 	}
 
-	return showURLs(c, &info)
+	return showURLs(c, &info, "submit.html")
 }
 
-func showURLs(c echo.Context, info *InfoURLs) error {
-	tmpl, err := template.ParseFiles("submit.html")
+func searchByWord(c echo.Context) error {
+	_, err := template.ParseFiles("crawl-main.html")
+	if err != nil {
+		return err
+	}
+
+	url := c.FormValue("url")
+
+	depth, err := strconv.Atoi(c.FormValue("depth"))
+	if err != nil {
+		return err
+	}
+
+	maxConcurrentRequests, err := strconv.Atoi(c.FormValue("maxConcurrentRequests"))
+	if err != nil {
+		return err
+	}
+
+	word := c.FormValue("word")
+
+	var result []Result // конечный массив в котором и будет информация для таблицы
+
+	totalAmountOfSpecialLinks = 0 // количество всех ссылок на странице без дубликатов
+	totalAmountOfAllLinks = 0     // количество всех ссылок на странице с дубликатами
+
+	var passedLinks sync.Map
+	var printedLinks sync.Map
+
+	wg.Add(1)
+
+	semaphore := make(chan struct{}, maxConcurrentRequests)
+
+	timeStart := time.Now()
+
+	err = crawl(url, depth, &result, &passedLinks, &printedLinks, &semaphore, 1, true, word)
+	wg.Wait()
+	if err != nil {
+		fmt.Println(err)
+		return err
+	}
+
+	totalTime := time.Since(timeStart)
+
+	fmt.Printf("\n\nWORD SEARCH\n")
+
+	fmt.Printf("\n%v - total time to crawl: %s\nwith depth: %d\ntotal amount of special links: %d\nnumber of concurrent requests: %d\n",
+		totalTime, url, depth, totalAmountOfSpecialLinks, maxConcurrentRequests)
+
+	links := fmt.Sprintf("Total amount of links (without duplicates): %d\n"+
+		"Total amount of links (with duplicates): %d", totalAmountOfSpecialLinks, totalAmountOfAllLinks)
+
+	info := InfoURLs{
+		Info:       result,
+		TotalLinks: links,
+	}
+
+	return showURLs(c, &info, "submit2.html")
+}
+
+func showURLs(c echo.Context, info *InfoURLs, file string) error {
+	tmpl, err := template.ParseFiles(file)
 	if err != nil {
 		return err
 	}
@@ -229,6 +331,8 @@ func main() {
 
 	e.POST("/submit", crawlRequest)
 
+	e.POST("/submit2", searchByWord)
+
 	e.Logger.Fatal(e.Start(":5050"))
 }
 
@@ -245,4 +349,37 @@ func toAbsoluteURL(base, href string) (string, error) {
 
 	absoluteURL := baseURL.ResolveReference(relativeURL)
 	return absoluteURL.String(), nil
+}
+
+func findSentencesWithWord(text, searchWord string) []string {
+	// Регулярное выражение для поиска предложений, заканчивающихся на ., !, ? и другие знаки
+	re := regexp.MustCompile(`(?i)[^.!?…;:]*\b` + regexp.QuoteMeta(searchWord) + `\b[^.!?…;:]*[.!?…;:]`)
+
+	matches := re.FindAllString(text, -1)
+
+	// Если совпадений с предложениями не найдено, проверяем на простое нахождение слова
+	wordRe := regexp.MustCompile(`\b` + regexp.QuoteMeta(searchWord) + `\b`)
+	simpleMatches := wordRe.FindAllString(text, -1)
+
+	// Добавляем совпадения без предложений, если они не были найдены как предложения
+	if len(matches) == 0 && len(simpleMatches) > 0 {
+		matches = append(matches, simpleMatches...)
+	}
+
+	// Убираем пробелы в начале и в конце предложений
+	for i, match := range matches {
+		matches[i] = strings.TrimSpace(match)
+	}
+
+	// Убираем дубликаты
+	uniqueMatches := make(map[string]struct{})
+	cleanedMatches := []string{}
+	for _, match := range matches {
+		if _, exists := uniqueMatches[match]; !exists {
+			uniqueMatches[match] = struct{}{}
+			cleanedMatches = append(cleanedMatches, match)
+		}
+	}
+
+	return cleanedMatches
 }
